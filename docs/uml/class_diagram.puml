@@ -1,0 +1,308 @@
+@startuml ZemenClassDiagram
+!pragma layout smetana
+!define ABSTRACT abstract
+!define INTERFACE interface
+title Zemen Dual Calendar — Enriched Class Diagram
+
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor White
+  BorderColor #333333
+  ArrowColor #333333
+  FontName Arial
+}
+skinparam linetype ortho
+
+' ─────────────────────────────────────────
+'  DATA MODELS (Persistence Layer)
+' ─────────────────────────────────────────
+
+class User {
+  - id : int <<PK>>
+  - email : str(255) <<UQ, IX>>
+  - full_name : str(255)
+  - preferred_calendar : str(20) = "gregorian"
+  - timezone : str(64) = "UTC"
+  - language : str(32) = "en"
+  - hashed_password : str(255)
+  - google_email : str(255)
+  - google_sub : str(255) <<IX>>
+  - google_access_token : str(2048)
+  - google_refresh_token : str(2048)
+  - google_token_expiry : datetime
+  - google_token_scope : str(2048)
+  - google_oauth_state : str(255)
+  - google_connected_at : datetime
+  - created_at : datetime
+  - updated_at : datetime
+  --
+  + register(email: str, password: str, full_name: str) : User
+  + login(email: str, password: str) : bool
+  + login_google(google_token: str) : User
+  + update_profile(full_name: str, timezone: str, calendar: str) : void
+  + change_password(old: str, new: str) : bool
+  + get_events(ownership: str = "all") : List[Event]
+  + get_shared_events() : List[Event]
+  + disconnect_google() : void
+}
+
+class Event {
+  - id : int <<PK>>
+  - user_id : int <<FK, IX>>
+  - version : int = 1
+  - title : str(255)
+  - description : text
+  - start_time_utc : datetime
+  - end_time_utc : datetime
+  - timezone : str(64) = "UTC"
+  - reminder_minutes : int = 60
+  - recurrence_group_id : str(36) <<IX>>
+  - recurrence_rule : str(16)
+  - recurrence_interval : int
+  - recurrence_byday : str(64)
+  - created_at : datetime
+  - updated_at : datetime
+  --
+  + create(user_id: int, title: str, start_local: datetime, ...) : Event
+  + serialize() : dict
+  + serialize_with_local_time(tz: str) : dict
+  + update(version: int, **kwargs) : Event
+  + delete() : bool
+  + check_version_conflict(provided_version: int) : bool
+  + increment_version() : void
+  + get_participants() : List[EventParticipant]
+  + get_snapshots() : List[EventSnapshot]
+  + share_with(target_user_id: int, role: str) : EventParticipant
+  + remove_participant(user_id: int) : bool
+  + get_owner() : User
+  + get_series() : List[Event]
+  + delete_series(scope: str) : int
+}
+
+class EventParticipant {
+  - id : int <<PK>>
+  - event_id : int <<FK, IX>>
+  - user_id : int <<FK, IX>>
+  - role : str(16) = "viewer"
+  - __table_args__ : UniqueConstraint(event_id, user_id)
+  --
+  + values : {OWNER="owner", EDITOR="editor", VIEWER="viewer"}
+  + get_user() : User
+  + get_event() : Event
+  + update_role(new_role: str) : void
+  + can_edit() : bool
+  + can_view() : bool
+}
+
+class EventSnapshot {
+  - id : int <<PK>>
+  - event_id : int <<FK, IX>>
+  - version : int
+  - title : str
+  - description : str
+  - start_time_utc : str
+  - end_time_utc : str
+  - timezone : str
+  - reminder_minutes : int
+  - created_at : datetime
+  --
+  + create_from_event(event: Event) : EventSnapshot
+  + restore_to_event() : Event
+  + get_diff_from_previous() : dict
+  + get_event() : Event
+}
+
+class Holiday {
+  - id : int <<PK>>
+  - name : str(255)
+  - category : str(50) = "public"
+  - calendar_type : str(20)
+  - g_year : int
+  - g_month : int
+  - g_day : int
+  - e_year : int
+  - e_month : int
+  - e_day : int
+  - resolved_date : date <<IX>>
+  - created_at : datetime
+  - updated_at : datetime
+  --
+  + is_holiday(check_date: date) : bool
+  + get_gregorian_date() : date
+  + get_ethiopian_date() : dict
+  + in_range(start: date, end: date) : List[Holiday]
+}
+
+class ReminderLog {
+  - id : int <<PK>>
+  - event_id : int <<FK, UQ, IX>>
+  - recipient_email : str(255)
+  - sent_at : datetime
+  --
+  + get_event() : Event
+  + get_recipient() : User
+  + was_sent_recently(minutes: int) : bool
+}
+
+' ─────────────────────────────────────────
+'  SERVICE LAYER (Business Logic)
+' ─────────────────────────────────────────
+
+class DateConversionService {
+  - {static} ETH_MONTHS : dict
+  --
+  - {static} _gregorian_to_eth_jdn(year: int, month: int, day: int) : tuple
+  + {static} gregorian_to_ethiopian(g_date: date) : dict
+  + {static} ethiopian_to_gregorian(year: int, month: int, day: int) : dict
+  + {static} utc_to_local(utc_dt: datetime, timezone_str: str) : datetime
+  + {static} local_to_utc(local_dt: datetime, timezone_str: str) : datetime
+}
+
+class IntervalService {
+  --
+  + {static} normalize(intervals: List[Tuple]) : List[Tuple]
+  + {static} merge_intervals(intervals: List[Tuple]) : List[Tuple]
+  + {static} find_gaps(window_start: datetime, window_end: datetime, busy: List[Tuple]) : List[Tuple]
+  + {static} choose_slots(gaps: List[Tuple], duration_minutes: int, limit: int) : List[Tuple]
+  + {static} events_user_can_see(db: Session, user_id: int) : Query
+  + {static} holiday_intervals(db: Session, window_start: datetime, window_end: datetime) : List[Tuple]
+  + {static} busy_intervals_for_user(db: Session, user_id: int, window_start: datetime, window_end: datetime, exclude_event_id: int) : List[Tuple]
+  + {static} collect_busy_by_participants(db: Session, participant_ids: List[int], window_start: datetime, window_end: datetime, exclude_event_id: int) : Tuple[dict, List[Tuple]]
+}
+
+class RankingService {
+  --
+  + {static} rank_slots(slots: List[Tuple], busy_by_user: dict, required_users: Set[int], optional_users: Set[int], work_start_hour: int, work_end_hour: int, tz_name: str = "UTC") : List[dict]
+  + {static} in_work_hours(slot_start: datetime, work_start_hour: int, work_end_hour: int, tz_name: str = "UTC") : bool
+  + {static} slot_conflicts_for_user(busy_intervals: List[Tuple], slot: Tuple) : bool
+  + {static} score_to_rating(score: int) : str
+}
+
+class DiffService {
+  --
+  + {static} diff_dicts(old: dict, new: dict) : dict
+}
+
+class SecurityService {
+  - {static} ALGORITHM : str = "HS256"
+  - {static} ACCESS_TOKEN_EXPIRE_MINUTES : int = 60
+  --
+  + {static} hash_password(password: str) : str
+  + {static} verify_password(plain: str, hashed: str) : bool
+  + {static} create_access_token(subject: str) : str
+  + {static} get_current_user(db: Session, email: str) : User
+  + {static} get_event_with_access(db: Session, user: User, event_id: int) : Tuple[Event, str]
+  + {static} require_editor_or_owner(role: str) : void
+  + {static} require_owner(role: str) : void
+}
+
+class ReminderService {
+  - {static} REMINDER_POLL_SECONDS : int = 10
+  - {static} logger : Logger
+  --
+  + {static} send_email_reminder(to_email: str, event: Event) : void
+  + {static} reminder_already_logged(db: Session, event_id: int, recipient_email: str) : bool
+  + {static} log_reminder_sent(db: Session, event_id: int, recipient_email: str) : void
+  + {static} fetch_candidate_events(db: Session, now_utc: datetime) : List[Event]
+  + {static} process_reminders_once() : void
+  + {static} reminder_loop() : void
+  + {static} get_smtp_settings() : dict
+  + {static} smtp_is_configured() : bool
+}
+
+class SchedulingService {
+  - {static} DEFAULT_DURATION_MINUTES : int = 60
+  --
+  + {static} event_end_time(start: datetime, end: Optional[datetime]) : datetime
+  + {static} overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) : bool
+  + {static} serialize_event(event: Event) : dict
+  + {static} snapshot_event(db: Session, event: Event) : void
+  + {static} create_single_event(db: Session, user: User, payload: EventCreate) : dict
+  + {static} create_recurring_series(db: Session, user: User, payload: EventCreate) : dict
+  + {static} apply_event_update(db: Session, event: Event, payload: EventUpdate) : void
+  + {static} query_events(db: Session, user: User, q: str, timezone_filter: str, start_from: str, start_to: str, ownership: str, limit: int, offset: int) : List[Event]
+}
+
+class RecurrenceService {
+  - {static} MAX_OCCURRENCES : int = 500
+  - {static} WEEKDAY_MAP : dict
+  - {static} VALID_BYDAY : set
+  --
+  + {static} validate_recurrence_params(end_type: str, end_count_raw: int, end_until_raw: str, byday_raw: str, start_date: date) : Tuple[int, date, list]
+  + {static} expand_occurrences(frequency: str, interval: int, byday: list, end_type: str, end_count: int, end_until: date, base_start: datetime, duration: timedelta) : List[Tuple]
+  + {static} detect_series_conflicts(occurrences: List[Tuple], db: Session, user_id: int) : List[dict]
+}
+
+' ─────────────────────────────────────────
+'  RELATIONSHIPS (Association, Dependency)
+' ─────────────────────────────────────────
+
+User "1" --o{ "0..*" Event : "owns\n(user_id)"
+User "1" --o{ "0..*" EventParticipant : "participates_in\n(user_id)"
+
+Event "1" --o{ "0..*" EventParticipant : "has\n(event_id)"
+Event "1" --o{ "1..*" EventSnapshot : "audited_by\n(event_id)"
+Event "0..1" --o| "0..1" ReminderLog : "tracked_by\n(event_id)"
+EventParticipant "0..*" --> "1" User : user_id
+EventParticipant "0..*" --> "1" Event : event_id
+EventSnapshot --> "1" Event : references
+
+Holiday ......> DateConversionService : uses
+Event ......> SecurityService : enforces_auth
+Event ......> DiffService : version_diff
+Event ......> IntervalService : scheduling
+Event ......> SchedulingService : suggest_slots
+ReminderService ......> ReminderLog : logs_sent
+ReminderService ......> Event : queries
+Event ......> RecurrenceService : expands_series
+RecurrenceService ......> Event : creates_occurrences
+
+note right of User
+  Authentication entry point
+  Supports both password & OAuth
+  Maintains timezone preferences
+end note
+
+note right of Event
+  Core domain entity
+  Immutable via optimistic locking (version)
+  Auditable via EventSnapshot
+  Inherently multi-user (participants)
+end note
+
+note right of EventParticipant
+  Join table with role-based access
+  Roles: owner (creator, full control)
+           editor (modify, share)
+           viewer (read-only)
+end note
+
+note right of ReminderService
+  Background daemon thread (threading.Thread)
+  Polls every 10s via time.sleep(REMINDER_POLL_SECONDS)
+  Sends via SMTP, logs sent status
+  Reliability: uses proper logging module
+end note
+
+note right of DateConversionService
+  Handles two distinct conversion domains:
+  (1) Ethiopian↔Gregorian calendar conversion —
+      used by /convert and holiday routers.
+  (2) UTC↔local timezone conversion —
+      utc_to_local / local_to_utc used by
+      SchedulingService for event serialization
+      and UTC storage.
+end note
+
+note right of RecurrenceService
+  Expands a recurrence rule into
+  concrete (start, end) datetime pairs.
+  Works in local time; caller converts to UTC.
+  Capped at MAX_OCCURRENCES=500.
+  Supports: daily / weekly / monthly.
+  detect_series_conflicts() checks for
+  overlap with pre-existing events BEFORE
+  any DB insert (no rollback needed).
+end note
+
+@enduml

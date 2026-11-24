@@ -1,0 +1,79 @@
+@startuml Sequence_Create_Event
+title Zemen — Sequence Diagram: Create & Share Event
+
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+skinparam FontName Arial
+
+actor       "Owner"          as O
+actor       "Participant"     as P
+participant "React Frontend"  as FE
+participant "FastAPI /events" as EV
+participant "SecurityService" as SEC
+participant "SchedulingService" as SCHED
+database    "PostgreSQL"      as DB
+
+== Create Event ==
+
+O -> FE : Fill event form\n(title, start/end, timezone, reminder,\nrepeat preset, end-repeat, recurrence fields)
+note right of FE
+  EventForm maps UI state → payload:
+    recurrence_rule:     "none" | "daily" | "weekly" | "monthly"
+    recurrence_interval: int (1, 2, …)   — "every_year" maps to monthly/12
+    recurrence_end_type: "count" | "until"
+    recurrence_end_count: 365  (end repeat = Never; backend cap is 1-365)
+    recurrence_end_until: "YYYY-MM-DD"  (end repeat = On Date)
+    recurrence_byday:    "MON,WED,FRI"  (weekly only)
+  Preset "every_2_weeks" → rule="weekly", interval=2
+  Custom panel uses TwoColumnWheelPicker + day checkboxes (daily/weekly/monthly only)
+end note
+FE -> EV : POST /events\nAuthorization: Bearer <token>
+EV -> SEC : get_current_user(email)
+SEC -> DB : SELECT * FROM users WHERE email=...
+DB --> SEC : User row
+SEC --> EV : User
+alt recurrence_rule == "none"
+  EV -> SCHED : create_single_event(db, user, payload)\n(local_to_utc via DateConversionService)
+  SCHED -> DB : INSERT INTO events\n(user_id, version=1, title, start_time_utc, ...)
+  DB --> SCHED : Event row (id=42)
+  SCHED -> DB : INSERT INTO event_snapshots\n(event_id=42, version=1, ...)
+  note right : Snapshot saved for\nversion history / diff
+  DB --> SCHED : Snapshot row
+  SCHED --> EV : serialized event dict
+  EV --> FE : 200 {id, title, version=1, ...}
+else recurrence_rule != "none"
+  EV -> SCHED : create_recurring_series(db, user, payload)
+  SCHED -> SCHED : RecurrenceService.validate_recurrence_params()
+  SCHED -> SCHED : RecurrenceService.expand_occurrences()\nGenerates (start_local, end_local) tuples
+  SCHED -> SCHED : DateConversionService.local_to_utc()\nConverts each occurrence to UTC
+  SCHED -> SCHED : RecurrenceService.detect_series_conflicts()\nPre-insert conflict check — no rollback risk
+  loop for each occurrence
+    SCHED -> DB : INSERT INTO events\n(recurrence_group_id=UUID, rule, interval, byday, ...)
+    DB --> SCHED : Event row
+  end
+  SCHED --> EV : {id, recurrence_created: N, recurrence_conflicts: [...]}
+  EV --> FE : 200 {id, recurrence_created: N, recurrence_conflicts: [...]}
+end
+FE --> O : Event(s) displayed on calendar
+
+== Share Event ==
+
+O -> FE : Open event → Add participant\n(email="bob@example.com", role="editor")
+FE -> EV : POST /events/42/share\n{email, role}
+EV -> DB : SELECT users WHERE email="bob@example.com"
+DB --> EV : User row (id=7)
+EV -> DB : INSERT INTO event_participants\n(event_id=42, user_id=7, role="editor")
+DB --> EV : Participant row
+EV --> FE : 200 {shared: true, event_id: 42, user_id: 7, role: "editor"}
+FE --> O : Participant badge shown
+
+== Participant Views Shared Event ==
+
+P -> FE : Login as bob@example.com
+FE -> EV : GET /events?ownership=shared
+EV -> DB : SELECT events JOIN event_participants\nWHERE user_id=7
+DB --> EV : [Event id=42, ...]
+EV --> FE : [{id, title, start_time_utc, ...}, ...]
+FE --> P : Shared events shown on calendar
+
+@enduml

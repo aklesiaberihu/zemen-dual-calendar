@@ -1,0 +1,12 @@
+fastapi
+uvicorn==0.40.0
+sqlalchemy
+psycopg2-binary
+pydantic[email]
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+ethiopian-date-converter
+requests==2.32.3
+pytest==9.0.2
+bcrypt==3.2.2

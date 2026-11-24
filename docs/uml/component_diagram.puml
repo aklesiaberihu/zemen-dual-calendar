@@ -1,0 +1,221 @@
+@startuml ZemenComponentDiagram
+!pragma layout smetana
+!define USECASE(x)=circle "x" as x
+!define COMPONENT(x)=component x
+
+title Zemen — UML Component Diagram (3-Tier Architecture)
+
+skinparam component {
+  BackgroundColor White
+  BorderColor #333333
+  FontName Arial
+  ArrowColor #333333
+}
+skinparam database {
+  BackgroundColor #EEF5FB
+  BorderColor #3498db
+}
+skinparam cloud {
+  BackgroundColor #FDF5E6
+  BorderColor #E67E22
+}
+skinparam interface {
+  BackgroundColor #FFFFCC
+  BorderColor #FFB400
+}
+skinparam linetype ortho
+
+component "🖥 React Frontend\n(Vite, Port 5173)" as FE_TIER {
+  component "Welcome\nComponent" as FE_WELCOME
+  component "Login\nComponent" as FE_LOGIN
+  component "Calendar\nComponent" as FE_CALENDAR
+  component "Event Form\nComponent" as FE_EVENT_FORM {
+    component "TwoColumnWheelPicker\n(interval scroll wheel)" as FE_WHEEL
+    component "InlineCalendar\n(mini month grid)" as FE_INLINE_CAL
+    component "CustomRepeatPanel\n(frequency + byday config)" as FE_CUSTOM_REPEAT
+    component "AppleSelect\n(floating dropdown)" as FE_APPLE_SELECT
+  }
+  component "Settings\nComponent" as FE_SETTINGS
+  component "Date Conversion\nUI" as FE_CONVERT
+  component "Event Diff\nComponent" as FE_DIFF
+  interface "IUserAuthClient" as IUA
+  interface "IEventClient" as IEC
+  component "Fetch API Client\n(native, api.js)" as FE_HTTP
+  FE_HTTP - IUA
+  FE_HTTP - IEC
+  FE_LOGIN ..> IUA
+  FE_CALENDAR ..> IEC
+  FE_EVENT_FORM ..> IEC
+  FE_SETTINGS ..> IUA
+  FE_DIFF ..> IEC
+}
+
+component "🔧 FastAPI Backend\n(Python, Port 8000)" as APP_TIER {
+
+  ' API Router Components
+  component "Auth Router\n(register, login)" as AUTH_COMP {
+    interface "IAuthAPI" as IAUTH_API
+  }
+
+  component "Profile Router\n(user settings)" as PROFILE_COMP {
+    interface "IProfileAPI" as IPROFILE_API
+  }
+
+  component "Event Router\n(CRUD, share, participants, series, diff)" as EVENT_COMP {
+    interface "IEventAPI" as IEVENT_API
+  }
+
+  component "Date Conversion Router\n(greg ↔ eth)" as CONV_COMP {
+    interface "IConversionAPI" as ICONV_API
+  }
+
+  component "Scheduling Router\n(suggest, rank, conflicts)" as SCHED_COMP {
+    interface "ISchedulingAPI" as ISCHED_API
+  }
+
+  component "Holiday Router\n(CRUD)" as HOLIDAY_COMP {
+    interface "IHolidayAPI" as IHOLIDAY_API
+  }
+
+  component "Google OAuth Router" as OAUTH_COMP {
+    interface "IOAuthAPI" as IOAUTH_API
+  }
+
+  ' Service Components (Business Logic)
+  component "🔐 Security Service\n(JWT, bcrypt, access control)" as SEC_COMP {
+    interface "ISecurityService" as ISEC
+  }
+
+  component "📅 Date Conversion\nService" as DCS_COMP {
+    interface "IDateConversion" as IDCS
+  }
+
+  component "⏱ Interval Service\n(merge, gaps, slots)" as INTERVAL_COMP {
+    interface "IIntervalService" as IIS
+  }
+
+  component "🎯 Ranking Service\n(constraint scoring)" as RANKING_COMP {
+    interface "IRankingService" as IRS
+  }
+
+  component "🔄 Diff Service\n(version auditing)" as DIFF_COMP {
+    interface "IDiffService" as IDS
+  }
+
+  component "📧 Reminder Service\n(daemon thread, SMTP)" as REMINDER_COMP {
+    interface "IReminderService" as IREM
+  }
+
+  component "♻️ Recurrence Service\n(expand, conflict-check)" as RECURRENCE_COMP {
+    interface "IRecurrenceService" as IRECUR
+  }
+
+  ' Middleware & Supporting
+  component "CORS Middleware" as CORS_MW
+  component "Request/Response\nValidation (Pydantic)" as VALIDATION
+
+  ' Service Dependencies
+  AUTH_COMP ..> ISEC
+  AUTH_COMP ..> VALIDATION
+  PROFILE_COMP ..> ISEC
+  EVENT_COMP ..> VALIDATION
+  EVENT_COMP ..> ISEC
+  EVENT_COMP ..> IDCS
+  EVENT_COMP ..> IRECUR
+  EVENT_COMP ..> IDS
+  SCHED_COMP ..> IIS
+  SCHED_COMP ..> IRS
+  CONV_COMP ..> IDCS
+  HOLIDAY_COMP ..> IDCS
+  OAUTH_COMP ..> ISEC
+}
+
+component "🗄 SQLAlchemy ORM\n(Data Access Layer)" as ORM_TIER {
+  interface "IUserDAO" as IUSER_DAO
+  interface "IEventDAO" as IEVENT_DAO
+  component "User Model\n(Repository)" as USER_MODEL
+  component "Event Model\n(Repository)" as EVENT_MODEL
+  component "EventParticipant\nModel" as PARTICIPANT_MODEL
+  component "EventSnapshot\nModel" as SNAPSHOT_MODEL
+  component "Holiday Model" as HOLIDAY_MODEL
+  component "ReminderLog Model" as LOG_MODEL
+  USER_MODEL - IUSER_DAO
+  EVENT_MODEL - IEVENT_DAO
+}
+
+database "🗃️ PostgreSQL 16\n(Port 5432)\n\n6 Tables:\n  users\n  events\n  event_participants\n  event_snapshots\n  holidays\n  reminder_logs\n\nIndexes & Constraints:\n  PK, FK (CASCADE),\n  UQ (email, event+user),\n  IX (user_id, start_time_utc,\n     resolved_date,\n     recurrence_group_id)" as DB_POSTGRES
+
+cloud "🔑 Google OAuth 2.0\naccounts.google.com" as GOOGLE_OAUTH
+
+cloud "📧 SMTP Server\n(Email Reminders)\n(TLS/STARTTLS)" as SMTP_SERVICE
+
+FE_HTTP --> IUA : uses
+FE_HTTP --> IEC : uses
+FE_HTTP --> IPROFILE_API : REST/HTTP/CORS
+FE_HTTP --> IAUTH_API : REST/HTTP/JSON
+FE_HTTP --> IEVENT_API
+FE_HTTP --> ICONV_API
+FE_HTTP --> ISCHED_API
+FE_HTTP --> IHOLIDAY_API
+FE_HTTP --> IOAUTH_API
+
+AUTH_COMP --> IUSER_DAO
+PROFILE_COMP --> IUSER_DAO
+EVENT_COMP --> IEVENT_DAO
+SCHED_COMP --> IEVENT_DAO
+HOLIDAY_COMP --> HOLIDAY_MODEL
+REMINDER_COMP --> IEVENT_DAO
+REMINDER_COMP --> LOG_MODEL
+
+IUSER_DAO ..> DB_POSTGRES : SQLAlchemy Session
+IEVENT_DAO ..> DB_POSTGRES : SQLAlchemy Session
+PARTICIPANT_MODEL ..> DB_POSTGRES
+SNAPSHOT_MODEL ..> DB_POSTGRES
+HOLIDAY_MODEL ..> DB_POSTGRES
+LOG_MODEL ..> DB_POSTGRES
+
+OAUTH_COMP --> GOOGLE_OAUTH : OAuth2 token\nexchange
+REMINDER_COMP --> SMTP_SERVICE : smtplib\n(TLS)
+
+note right of FE_TIER
+  Responsive React 19 SPA
+  Pages: Welcome, Login, Calendar, EventForm,
+         Settings, Convert, EventDiff
+  State management: React hooks
+  API calls: Fetch API + JWT bearer token
+  Vite 7 bundler for dev/prod
+  EventForm inline components (EventForm.jsx):
+    TwoColumnWheelPicker — scroll-snap interval picker
+    InlineCalendar — mini grid for repeat end-date
+    CustomRepeatPanel — frequency/byday configuration
+    AppleSelect — floating dark-themed dropdown overlay
+  EventDiff: field-level version comparison viewer
+end note
+
+note right of APP_TIER
+  FastAPI framework
+  Synchronous request handlers (def, not async def)
+  Pydantic validation at boundary
+  Services are stateless, reusable
+  ReminderService runs in background daemon thread
+  RecurrenceService: expands rules into local-time occurrences
+  (caller converts to UTC via DateConversionService.local_to_utc)
+end note
+
+note right of ORM_TIER
+  SQLAlchemy (synchronous Session, psycopg2 driver)
+  Models define schema + constraints
+  Relationships auto-load (lazy by default)
+  Transactions with ACID guarantees
+end note
+
+note right of DB_POSTGRES
+  PostgreSQL 16 with:
+  - UTC-only timestamp storage (NFR-S2)
+  - Optimistic locking (version column)
+  - Audit trail (snapshots table)
+  - Referential integrity (cascading deletes)
+  - Indexes on lookup columns (perf NFR-P1)
+end note
+
+@enduml

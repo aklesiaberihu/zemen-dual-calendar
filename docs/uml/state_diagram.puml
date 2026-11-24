@@ -1,0 +1,92 @@
+@startuml Zemen_EventLifecycle
+!pragma layout smetana
+title Zemen — Event Lifecycle State Diagram
+
+skinparam state {
+  BackgroundColor White
+  BorderColor #333333
+  FontName Arial
+  ArrowColor #555555
+}
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #F9A825
+  FontName Arial
+}
+
+[*] --> Persisted : Owner calls POST /events\n(single or recurring series)
+
+state Persisted {
+  [*] --> Draft : event inserted\nversion = 1\nsnapshot saved
+  Draft : start_time_utc > now
+  Draft : reminder not yet sent
+}
+
+Persisted --> Ongoing : start_time_utc <= now\n(time-based transition,\nNOT stored in DB)
+
+state Ongoing {
+  [*] --> Running : event in progress
+  Running : start_time_utc <= now
+  Running : end_time_utc > now (or NULL)
+  Running : reminder already sent\n(if SMTP configured)
+}
+
+Ongoing --> Past : end_time_utc <= now\n(only if end_time_utc is NOT NULL;\nevents with NULL end_time_utc\nremain Ongoing indefinitely)
+
+state Past {
+  [*] --> Ended
+  Ended : end_time_utc < now
+  Ended : snapshots retained for audit
+  Ended : visible on calendar as\npast event
+}
+
+Persisted --> Deleted : Owner calls\nDELETE /events/{id}
+Ongoing --> Deleted  : Owner calls\nDELETE /events/{id}
+Past --> Deleted     : Owner calls\nDELETE /events/{id}
+
+Deleted --> [*]
+
+note right of Persisted
+  Created by POST /events.
+  version = 1, snapshot saved immediately.
+  Reminder scheduled: fires at
+  start_time_utc − reminder_minutes
+  (reminder_minutes default = 60).
+  Participants can be added via
+  POST /events/{id}/share.
+end note
+
+note right of Ongoing
+  Event is in progress.
+  Edits (PUT /events/{id}) still allowed
+  by owner or editor — version increments,
+  new snapshot saved after each edit.
+  Optimistic locking (version check) active.
+end note
+
+note right of Past
+  end_time_utc has passed.
+  Snapshots and participants are retained.
+  Diff (GET /events/{id}/diff) still available.
+  Hard DELETE still possible — removes event,
+  snapshots, and participants (CASCADE).
+end note
+
+note right of Deleted
+  Hard DELETE from PostgreSQL.
+  ON DELETE CASCADE removes:
+    event_snapshots, event_participants,
+    reminder_logs linked to this event.
+  No soft-delete or archive; data is gone.
+end note
+
+note bottom
+  **Implementation facts:**
+  • Event model has NO status column — states are temporal (derived from datetime comparisons).
+  • delete_event() in events.py is unconditional — requires only owner role, not any particular "state."
+  • Events with NULL end_time_utc never enter Past state.
+  • Recurrence series: multiple Event rows share recurrence_group_id (UUID).
+    DELETE /events/{id}/series with scope="all"|"from_here" removes the group.
+end note
+
+@enduml
